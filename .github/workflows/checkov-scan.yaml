@@ -1,0 +1,141 @@
+
+name: "IaC Security Scan dengan Checkov"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  checkov-scan:
+    name: "Checkov Security Scan"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Setup Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "Install Checkov"
+        run: pip install checkov
+
+      - name: "Run Checkov and Generate SARIF"
+        id: checkov-terraform
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+
+          checkov -d terraform \
+            --framework terraform \
+            --check CKV_AWS_20,CKV_AWS_19,CKV_AWS_18 \
+            -o json > checkov_out.json
+
+          CHECKOV_EXIT=$?
+
+          set -e
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open("checkov_out.json", encoding="utf-8") as f:
+              raw = json.load(f)
+
+          if isinstance(raw, list):
+              raw = raw[0] if raw else {}
+
+          failed = raw.get("results", {}).get("failed_checks", [])
+
+          rules = {}
+          results = []
+
+          for item in failed:
+              cid = item.get("check_id", "CKV_UNKNOWN")
+              cname = item.get("check_name", cid)
+              resource = item.get("resource", "")
+
+              file_path = item.get("file_path", "main.tf").lstrip("/")
+              if not file_path.startswith("terraform/"):
+                  file_path = "terraform/" + file_path
+
+              lines = item.get("file_line_range", [1, 1])
+
+              start_line = max(1, int(lines[0]))
+              end_line = max(start_line, int(lines[1]))
+
+              if cid not in rules:
+                  rules[cid] = {
+                      "id": cid,
+                      "name": cid,
+                      "shortDescription": {"text": cname},
+                      "fullDescription": {"text": cname},
+                      "defaultConfiguration": {"level": "error"}
+                  }
+
+              results.append({
+                  "ruleId": cid,
+                  "level": "error",
+                  "message": {
+                      "text": "{} ({})".format(cname, resource)
+                  },
+                  "locations": [{
+                      "physicalLocation": {
+                          "artifactLocation": {"uri": file_path},
+                          "region": {
+                              "startLine": start_line,
+                              "endLine": end_line
+                          }
+                      }
+                  }]
+              })
+
+          sarif = {
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "version": "2.1.0",
+              "runs": [{
+                  "tool": {
+                      "driver": {
+                          "name": "Checkov",
+                          "rules": list(rules.values())
+                      }
+                  },
+                  "results": results
+              }]
+          }
+
+          with open("valid-checkov.sarif", "w", encoding="utf-8") as f:
+              json.dump(sarif, f, indent=2)
+
+          print("Jumlah alert dijana:", len(results))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("failed_count={}\n".format(len(failed)))
+          PY
+
+          echo "Checkov exit code: $CHECKOV_EXIT"
+
+      - name: "Upload SARIF ke GitHub Security"
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('valid-checkov.sarif') != ''
+        with:
+          sarif_file: valid-checkov.sarif
+          category: "checkov-terraform"
+
+      - name: "Block pipeline jika ada temuan pada Pull Request"
+        if: github.event_name == 'pull_request' && (steps.checkov-terraform.outcome == 'failure' || steps.checkov-terraform.outputs.failed_count != '0')
+        run: |
+          echo "Security issue ditemukan. Periksa hasil Checkov."
+          exit 1
