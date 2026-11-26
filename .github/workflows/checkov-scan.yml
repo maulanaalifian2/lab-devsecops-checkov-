@@ -69,10 +69,4 @@ jobs:
         if: steps.checkov-terraform.outcome == 'failure'
         run: |
           echo "❌ Checkov menemukan pelanggaran keamanan pada Terraform!"
-          echo "Periksa log job atau tab Security -> Code scanning untuk detail."
           exit 1
-
-      - name: "Report sukses"
-        if: steps.checkov-terraform.outcome == 'success'
-        run: |
-          echo "✅ Seluruh pemeriksaan Checkov pada Terraform PASSED!"
