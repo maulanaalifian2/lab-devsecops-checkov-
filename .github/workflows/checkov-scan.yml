@@ -30,25 +30,31 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: "Run Checkov & Fix SARIF URI"
+      - name: "Run Checkov & Prepare SARIF"
         run: |
           pip install checkov
-          checkov -d terraform --framework terraform --check CKV_AWS_20,CKV_AWS_19,CKV_AWS_18 --soft-fail -o cli -o sarif --output-file-path console,results.sarif
+          checkov -d terraform --framework terraform --check CKV_AWS_20,CKV_AWS_19,CKV_AWS_18 --soft-fail -o sarif --output-file-path out_sarif
           python3 -c '
-          import json, glob
-          sarif_files = glob.glob("*.sarif")
-          print("File SARIF ditemukan:", sarif_files)
-          with open(sarif_files[0], "r") as f:
+          import json, glob, sys
+          files = glob.glob("**/*.sarif", recursive=True)
+          print("SARIF ditemukan:", files)
+          if not files:
+              sys.exit(1)
+          with open(files[0], "r") as f:
               data = json.load(f)
+          total_alerts = 0
           for run in data.get("runs", []):
-              for res in run.get("results", []):
+              results = run.get("results", [])
+              total_alerts += len(results)
+              for res in results:
+                  res["level"] = "error"
                   for loc in res.get("locations", []):
-                      uri = loc["physicalLocation"]["artifactLocation"]["uri"]
-                      uri = uri.lstrip("/")
+                      uri = loc["physicalLocation"]["artifactLocation"]["uri"].lstrip("/")
                       if not uri.startswith("terraform/"):
                           uri = "terraform/" + uri
                       loc["physicalLocation"]["artifactLocation"]["uri"] = uri
-                      print("Fixed URI:", uri, "Rule:", res.get("ruleId"))
+                      print("Alert:", res.get("ruleId"), "->", uri)
+          print("Total alerts siap upload:", total_alerts)
           with open("final-checkov.sarif", "w") as f:
               json.dump(data, f, indent=2)
           '
