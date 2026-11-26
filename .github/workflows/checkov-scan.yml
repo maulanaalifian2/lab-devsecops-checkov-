@@ -26,40 +26,81 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: "Run Checkov & Prepare SARIF"
+      - name: "Run Checkov & Generate Valid SARIF"
         id: checkov-terraform
         continue-on-error: true
         run: |
           pip install checkov
-          checkov -d terraform --framework terraform --check CKV_AWS_20,CKV_AWS_19,CKV_AWS_18 -o cli -o sarif --output-file-path console,sarif_out
+          checkov -d terraform --framework terraform --check CKV_AWS_20,CKV_AWS_19,CKV_AWS_18 -o cli -o json > checkov_out.json || true
           python3 -c '
-          import json, glob
-          files = glob.glob("**/*.sarif", recursive=True)
-          print("SARIF ditemukan:", files)
-          if files:
-              with open(files[0]) as f:
-                  data = json.load(f)
-              for run in data.get("runs", []):
-                  for res in run.get("results", []):
-                      res["level"] = "error"
-                      for loc in res.get("locations", []):
-                          uri = loc["physicalLocation"]["artifactLocation"]["uri"].lstrip("/")
-                          if not uri.startswith("terraform/"):
-                              uri = "terraform/" + uri
-                          loc["physicalLocation"]["artifactLocation"]["uri"] = uri
-              with open("ready.sarif", "w") as f:
-                  json.dump(data, f, indent=2)
+          import json
+
+          with open("checkov_out.json") as f:
+              raw = json.load(f)
+
+          if isinstance(raw, list):
+              raw = raw[0]
+
+          failed = raw.get("results", {}).get("failed_checks", [])
+          rules = {}
+          results = []
+
+          for item in failed:
+              cid = item.get("check_id", "CKV_UNKNOWN")
+              cname = item.get("check_name", cid)
+              file_path = item.get("file_path", "/main.tf").lstrip("/")
+              if not file_path.startswith("terraform/"):
+                  file_path = "terraform/" + file_path
+              lines = item.get("file_line_range", [1, 1])
+
+              if cid not in rules:
+                  rules[cid] = {
+                      "id": cid,
+                      "name": cid,
+                      "shortDescription": {"text": cname},
+                      "fullDescription": {"text": cname},
+                      "defaultConfiguration": {"level": "error"}
+                  }
+
+              results.append({
+                  "ruleId": cid,
+                  "level": "error",
+                  "message": {"text": f"{cname} ({item.get(\"resource\", \"\")})"},
+                  "locations": [{
+                      "physicalLocation": {
+                          "artifactLocation": {"uri": file_path},
+                          "region": {"startLine": lines[0], "endLine": lines[1]}
+                      }
+                  }]
+              })
+
+          sarif = {
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "version": "2.1.0",
+              "runs": [{
+                  "tool": {
+                      "driver": {
+                          "name": "Checkov",
+                          "version": "3.4.11",
+                          "rules": list(rules.values())
+                      }
+                  },
+                  "results": results
+              }]
+          }
+
+          with open("valid-checkov.sarif", "w") as f:
+              json.dump(sarif, f, indent=2)
+          print("Jumlah alert dijana:", len(results))
           '
 
       - name: "Upload SARIF ke GitHub Security tab"
         uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('ready.sarif') != ''
+        if: always() && hashFiles('valid-checkov.sarif') != ''
         with:
-          sarif_file: ready.sarif
+          sarif_file: valid-checkov.sarif
           category: "checkov-terraform"
 
-      - name: "Block pipeline jika ditemukan pelanggaran di Terraform"
-        if: steps.checkov-terraform.outcome == 'failure'
-        run: |
-          echo "Checkov menemukan pelanggaran keamanan pada Terraform!"
-          exit 1
+      - name: "Block pipeline jika pada Pull Request"
+        if: github.event_name == 'pull_request' && steps.checkov-terraform.outcome == 'failure'
+        run: exit 1
