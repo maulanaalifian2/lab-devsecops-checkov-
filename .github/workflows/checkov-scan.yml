@@ -1,3 +1,6 @@
+cd ~/lab-checkov
+git checkout main
+cat << 'EOF' > .github/workflows/checkov-scan.yml
 name: "IaC Security Scan dengan Checkov"
 
 on:
@@ -25,42 +28,76 @@ jobs:
       - name: "Checkout repository"
         uses: actions/checkout@v4
 
-      - name: "Setup Python & Install Checkov"
-        uses: actions/setup-python@v5
+      - name: "Run Checkov - Terraform"
+        id: checkov-terraform
+        uses: bridgecrewio/checkov-action@master
         with:
-          python-version: "3.11"
+          directory: terraform/
+          framework: terraform
+          output_format: cli,sarif
+          output_file_path: console,checkov-terraform.sarif
+          soft_fail: false
+        continue-on-error: true
 
-      - name: "Run Checkov & Prepare SARIF"
+      - name: "Run Checkov - Kubernetes"
+        id: checkov-k8s
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: kubernetes/
+          framework: kubernetes
+          output_format: cli,sarif
+          output_file_path: console,checkov-k8s.sarif
+          soft_fail: true
+        continue-on-error: true
+
+      - name: "Run Checkov - Dockerfile"
+        id: checkov-dockerfile
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: dockerfile/
+          framework: dockerfile
+          output_format: cli,sarif
+          output_file_path: console,checkov-dockerfile.sarif
+          soft_fail: true
+        continue-on-error: true
+
+      - name: "Siapkan File SARIF Terraform"
+        if: always()
         run: |
-          pip install checkov
-          checkov -d terraform --framework terraform --check CKV_AWS_20,CKV_AWS_19,CKV_AWS_18 --soft-fail -o sarif --output-file-path out_sarif
           python3 -c '
-          import json, glob, sys
+          import json, glob
           files = glob.glob("**/*.sarif", recursive=True)
-          print("SARIF ditemukan:", files)
-          if not files:
-              sys.exit(1)
-          with open(files[0], "r") as f:
-              data = json.load(f)
-          total_alerts = 0
-          for run in data.get("runs", []):
-              results = run.get("results", [])
-              total_alerts += len(results)
-              for res in results:
-                  res["level"] = "error"
-                  for loc in res.get("locations", []):
-                      uri = loc["physicalLocation"]["artifactLocation"]["uri"].lstrip("/")
-                      if not uri.startswith("terraform/"):
-                          uri = "terraform/" + uri
-                      loc["physicalLocation"]["artifactLocation"]["uri"] = uri
-                      print("Alert:", res.get("ruleId"), "->", uri)
-          print("Total alerts siap upload:", total_alerts)
-          with open("final-checkov.sarif", "w") as f:
-              json.dump(data, f, indent=2)
+          print("Ditemukan SARIF:", files)
+          if files:
+              with open(files[0]) as f:
+                  data = json.load(f)
+              for run in data.get("runs", []):
+                  for res in run.get("results", []):
+                      for loc in res.get("locations", []):
+                          uri = loc["physicalLocation"]["artifactLocation"]["uri"].lstrip("/")
+                          if not uri.startswith("terraform/"):
+                              uri = "terraform/" + uri
+                          loc["physicalLocation"]["artifactLocation"]["uri"] = uri
+              with open("ready-terraform.sarif", "w") as f:
+                  json.dump(data, f, indent=2)
           '
 
       - name: "Upload SARIF ke GitHub Security tab"
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && hashFiles('ready-terraform.sarif') != ''
         with:
-          sarif_file: final-checkov.sarif
+          sarif_file: ready-terraform.sarif
+          category: "checkov-terraform"
+
+      - name: "Block pipeline jika ditemukan pelanggaran di Terraform"
+        if: steps.checkov-terraform.outcome == 'failure'
+        run: |
+          echo "Checkov menemukan pelanggaran keamanan pada Terraform!"
+          echo "Periksa log job atau tab Security -> Code scanning untuk detail."
+          exit 1
+
+      - name: "Report sukses"
+        if: steps.checkov-terraform.outcome == 'success'
+        run: |
+          echo "Seluruh pemeriksaan Checkov pada Terraform PASSED!"
+EOF
