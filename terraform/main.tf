@@ -130,3 +130,7 @@ resource "aws_s3_bucket_acl" "public" {
   bucket = aws_s3_bucket.public_bucket.id
   acl    = "public-read"
 }
+resource "aws_s3_bucket" "pr_gate_public" {
+  bucket = "pr-gate-insecure-s3-test"
+  acl    = "public-read"
+}
