@@ -10,3 +10,4 @@ resource "aws_s3_bucket_acl" "pr_gate_violation_acl" {
   bucket = aws_s3_bucket.pr_gate_violation.id
   acl    = "public-read"
 }
+# picu semakan checkov
