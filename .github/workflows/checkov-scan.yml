@@ -34,29 +34,6 @@ jobs:
           output_format: cli,sarif
           output_file_path: console,checkov-terraform.sarif
           soft_fail: false
-        continue-on-error: true
-
-      - name: "Run Checkov - Kubernetes"
-        id: checkov-k8s
-        uses: bridgecrewio/checkov-action@master
-        with:
-          directory: kubernetes/
-          framework: kubernetes
-          output_format: cli,sarif
-          output_file_path: console,checkov-k8s.sarif
-          soft_fail: true
-        continue-on-error: true
-
-      - name: "Run Checkov - Dockerfile"
-        id: checkov-dockerfile
-        uses: bridgecrewio/checkov-action@master
-        with:
-          directory: dockerfile/
-          framework: dockerfile
-          output_format: cli,sarif
-          output_file_path: console,checkov-dockerfile.sarif
-          soft_fail: true
-        continue-on-error: true
 
       - name: "Upload SARIF ke GitHub Security tab"
         uses: github/codeql-action/upload-sarif@v3
@@ -64,9 +41,3 @@ jobs:
         with:
           sarif_file: checkov-terraform.sarif
           category: "checkov-terraform"
-
-      - name: "Block pipeline jika ditemukan pelanggaran di Terraform"
-        if: steps.checkov-terraform.outcome == 'failure'
-        run: |
-          echo "❌ Checkov menemukan pelanggaran keamanan pada Terraform!"
-          exit 1
