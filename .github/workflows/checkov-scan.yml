@@ -7,10 +7,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - "terraform/**"
-      - "kubernetes/**"
-      - "dockerfile/**"
 
 permissions:
   contents: read
@@ -30,14 +26,40 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: "Run Checkov - Terraform"
+      - name: "Run Checkov & Prepare SARIF"
+        id: checkov-terraform
+        continue-on-error: true
         run: |
           pip install checkov
-          checkov -f terraform/main.tf --check CKV_AWS_20,CKV_AWS_19,CKV_AWS_18 -o cli -o sarif --output-file-path console,checkov-terraform.sarif
+          checkov -d terraform --framework terraform --check CKV_AWS_20,CKV_AWS_19,CKV_AWS_18 -o cli -o sarif --output-file-path console,sarif_out
+          python3 -c '
+          import json, glob
+          files = glob.glob("**/*.sarif", recursive=True)
+          print("SARIF ditemukan:", files)
+          if files:
+              with open(files[0]) as f:
+                  data = json.load(f)
+              for run in data.get("runs", []):
+                  for res in run.get("results", []):
+                      res["level"] = "error"
+                      for loc in res.get("locations", []):
+                          uri = loc["physicalLocation"]["artifactLocation"]["uri"].lstrip("/")
+                          if not uri.startswith("terraform/"):
+                              uri = "terraform/" + uri
+                          loc["physicalLocation"]["artifactLocation"]["uri"] = uri
+              with open("ready.sarif", "w") as f:
+                  json.dump(data, f, indent=2)
+          '
 
       - name: "Upload SARIF ke GitHub Security tab"
         uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('checkov-terraform.sarif') != ''
+        if: always() && hashFiles('ready.sarif') != ''
         with:
-          sarif_file: checkov-terraform.sarif
+          sarif_file: ready.sarif
           category: "checkov-terraform"
+
+      - name: "Block pipeline jika ditemukan pelanggaran di Terraform"
+        if: steps.checkov-terraform.outcome == 'failure'
+        run: |
+          echo "Checkov menemukan pelanggaran keamanan pada Terraform!"
+          exit 1
