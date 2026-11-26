@@ -143,3 +143,8 @@ resource "aws_s3_bucket" "insecure_demo" {
   bucket = "public-demo-bucket-checkov-test"
   acl    = "public-read"
 }
+
+resource "aws_s3_bucket" "insecure_demo" {
+  bucket = "public-demo-bucket-checkov-test"
+  acl    = "public-read"
+}
