@@ -133,3 +133,10 @@ resource "aws_s3_bucket_acl" "public" {
 resource "aws_s3_bucket" "security_tab_demo" {
   bucket = "security-tab-demo-bucket-2026"
 }
+
+resource "aws_s3_bucket" "public_bucket" {
+  bucket = "my-public-test-bucket" 
+}
+resource "aws_s3_bucket_acl" "public" {
+  bucket = aws_s3_bucket.public_bucket.id   acl    = "public-read" 
+} 
